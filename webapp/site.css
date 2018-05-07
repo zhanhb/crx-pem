@@ -1,0 +1,9 @@
+.item {
+    padding: 10px 5px;
+    float: left;
+    border-radius: 10px;
+    border: solid 1px grey;
+    margin: 4px;
+    min-width: 340px;
+    text-align: center;
+}
