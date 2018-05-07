@@ -94,14 +94,14 @@ http.createServer((request, response) => {
         });
     } else {
         pathname = path.normalize(pathMap[pathname] || pathname);
-        if (/(\.\.|[\\/])/.test(pathname)) {
+        if (/^(?:\.\.)?(?:[\\/].*)?$/.test(pathname)) {
             return notFound(response);
         }
-        let contentType = mineMap[pathname.substr(pathname.lastIndexOf('.') + 1)] || mineMap['default'];
         fs.readFile(WEBAPPS + pathname, (err, data) => {
             if (err) {
                 return notFound(response);
             }
+            let contentType = mineMap[pathname.substr(pathname.lastIndexOf('.') + 1)] || mineMap['default'];
             response.setHeader('Content-Type', contentType);
             response.end(data);
         });
