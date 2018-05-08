@@ -2,21 +2,16 @@
 'use strict';
 const http = require('http')
     , fs = require('fs')
-    , path = require('path')
-    , url = require('url');
-const ADDR = '127.0.0.1', PORT = 9090;
-const PEM_PATH = __dirname + '/pems/';
-const WEBAPPS = __dirname + '/webapp/';
+    , url = require('url')
+    , express = require('express');
+
+const HOST = '127.0.0.1', PORT = 9090;
+const PEM_PATH = __dirname + '/pems';
 
 function error(err, response) {
     console.error(err);
     response.statusCode = 500;
     return response.end('error\n');
-}
-
-function notFound(response) {
-    response.statusCode = 404;
-    response.end('Not found\n');
 }
 
 function newSync() {
@@ -41,69 +36,52 @@ function newSync() {
 }
 
 const sync = newSync();
-const pathMap = {
-    '': 'index.html'
-};
-const mineMap = {
-    'default': 'application/octet-stream',
-    'html': 'text/html; charset=utf-8',
-    'css': 'text/css; charset=utf-8',
-    'js': 'application/javascript; charset=utf-8'
-};
 
-http.createServer((request, response) => {
-    let {pathname, query} = url.parse(request.url, true);
-    if (pathname[0] != '/') {
-        return notFound(response);
-    }
-    pathname = pathname.substr(1);
-    if (!pathname) {
-        let accept = request.headers['accept'];
-        let json = 'application/json';
-        if (typeof accept === 'string' && accept.substr(0, json.length).toLowerCase() === json) {
-            fs.readdir(PEM_PATH, (err, files) => {
-                if (err) {
-                    return error(err);
-                }
-                let {page = 0, limit = 100} = query;
-                page = Math.max(0, (+page || 0) >> 0);
-                let offset = page * limit;
-                limit = Math.max(20, Math.min(+limit || 100, 1000));
-                files = files.filter(file => /(\w+\.pem)/.test(file));
-                response.setHeader('Content-Type', 'application/json');
-                response.end(JSON.stringify({
-                    page, offset, limit,
-                    data: files.slice(offset, offset + limit),
-                    total: files.length
-                }));
+const webapp = express.static('webapp');
+
+const notFound = express.Router().all('*', function (request, response) {
+    response.statusCode = 404;
+    response.end('Not found\n');
+});
+
+const dynamic = express().get('/', function (request, response, next) {
+    if (request.accepts(['json', 'html']) === 'json') {
+        const {pathname, query} = url.parse(request.url, true);
+        fs.readdir(PEM_PATH, (err, files) => {
+            if (err) {
+                return error(err);
+            }
+            let {page = 0, limit = 100} = query;
+            page = Math.max(0, (+page || 0) >> 0);
+            let offset = page * limit;
+            limit = Math.max(20, Math.min(+limit || 100, 1000));
+            files = files.filter(file => /(\w+\.pem)/.test(file));
+            response.json({
+                page, offset, limit,
+                data: files.slice(offset, offset + limit),
+                total: files.length
             });
-            return;
-        }
+        });
+        return;
     }
-    if (/\w+\.pem/.test(pathname)) {
-        sync(pathname, done => {
-            fs.readFile(PEM_PATH + pathname, (err, data) => {
-                if (err) {
-                    done();
-                    return notFound(response);
-                }
+    next();
+});
+
+const pems = express.Router().get(/^\/\w+\.pem$/, function (request, response, next) {
+    let {pathname, query} = url.parse(request.url, true);
+    sync(pathname, done => {
+        let path = PEM_PATH + pathname;
+        fs.readFile(path, (err, data) => {
+            if (err) {
+                done();
+                next();
+            } else {
                 response.setHeader('Content-Type', 'application/pkix-cert');
                 response.end(data);
-                fs.unlink(PEM_PATH + pathname, done);
-            });
-        });
-    } else {
-        pathname = path.normalize(pathMap[pathname] || pathname);
-        if (/^(?:\.\.)?(?:[\\/].*)?$/.test(pathname)) {
-            return notFound(response);
-        }
-        fs.readFile(WEBAPPS + pathname, (err, data) => {
-            if (err) {
-                return notFound(response);
+                fs.unlink(path, done);
             }
-            let contentType = mineMap[pathname.substr(pathname.lastIndexOf('.') + 1)] || mineMap['default'];
-            response.setHeader('Content-Type', contentType);
-            response.end(data);
         });
-    }
-}).listen(PORT, ADDR);
+    });
+});
+
+express().use(dynamic, pems, webapp, notFound).listen(PORT, HOST);
