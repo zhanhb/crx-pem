@@ -8,11 +8,19 @@ const http = require('http')
 const HOST = '127.0.0.1', PORT = 9090;
 const PEM_PATH = __dirname + '/pems';
 
-function error(err, response) {
-    console.error(err);
-    response.statusCode = 500;
-    return response.end('error\n');
-}
+const P = function () {
+    let keys = ['readdir', 'readFile', 'unlink'], obj = {};
+    for (let key of keys) {
+        obj[key] = function (file) {
+            return new Promise((resolve, reject) => {
+                fs[key](file, (err, result) => {
+                    err ? reject(err) : resolve(result);
+                });
+            });
+        }
+    }
+    return obj;
+}();
 
 function newSync() {
     const cache = new Map();
@@ -24,9 +32,7 @@ function newSync() {
                 resolve(done);
             }).then(
                 x => new Promise(resolve => resolve(onFinally())).then(() => x),
-                e => new Promise(resolve => resolve(onFinally())).then(() => {
-                    throw e;
-                })
+                e => new Promise(resolve => resolve(onFinally())).then(() => new Promise((resolve, reject) => reject(e)))
             ));
         }
 
@@ -41,26 +47,36 @@ const webapp = express.static('webapp');
 
 const notFound = express.Router().all('*', function (request, response) {
     response.statusCode = 404;
-    response.end('Not found\n');
+    switch (request.accepts(['json', 'text'])) {
+        case 'json':
+            response.json({
+                path: request.url,
+                message: 'Not found'
+            });
+            break;
+        case 'text':
+            response.end('Not found\n');
+    }
 });
 
 const dynamic = express().get('/', function (request, response, next) {
     if (request.accepts(['json', 'html']) === 'json') {
         const {pathname, query} = url.parse(request.url, true);
-        fs.readdir(PEM_PATH, (err, files) => {
-            if (err) {
-                return error(err);
-            }
+        P.readdir(PEM_PATH).then(files => {
             let {page = 0, limit = 100} = query;
             page = Math.max(0, (+page || 0) >> 0);
             let offset = page * limit;
             limit = Math.max(20, Math.min(+limit || 100, 1000));
-            files = files.filter(file => /(\w+\.pem)/.test(file));
+            files = files.filter(file => /\w+\.pem/.test(file));
             response.json({
                 page, offset, limit,
                 data: files.slice(offset, offset + limit),
                 total: files.length
             });
+        }, err => {
+            console.error(err);
+            response.statusCode = 500;
+            return response.end('error\n');
         });
         return;
     }
@@ -71,15 +87,13 @@ const pems = express.Router().get(/^\/\w+\.pem$/, function (request, response, n
     let {pathname, query} = url.parse(request.url, true);
     sync(pathname, done => {
         let path = PEM_PATH + pathname;
-        fs.readFile(path, (err, data) => {
-            if (err) {
-                done();
-                next();
-            } else {
-                response.setHeader('Content-Type', 'application/pkix-cert');
-                response.end(data);
-                fs.unlink(path, done);
-            }
+        P.readFile(path).then(data => {
+            response.setHeader('Content-Type', 'application/pkix-cert');
+            response.end(data);
+            fs.unlink(path, done);
+        }, () => {
+            done();
+            next();
         });
     });
 });
