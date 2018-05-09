@@ -8,7 +8,7 @@ const http = require('http')
 const HOST = '127.0.0.1', PORT = 9090;
 const PEM_PATH = __dirname + '/pems';
 
-const P = function () {
+const fsPromise = function () {
     let keys = ['readdir', 'readFile', 'unlink'], obj = {};
     for (let key of keys) {
         obj[key] = function (file) {
@@ -61,8 +61,8 @@ const notFound = express.Router().all('*', function (request, response) {
 
 const dynamic = express().get('/', function (request, response, next) {
     if (request.accepts(['json', 'html']) === 'json') {
-        const {pathname, query} = url.parse(request.url, true);
-        P.readdir(PEM_PATH).then(files => {
+        const {query} = url.parse(request.url, true);
+        fsPromise.readdir(PEM_PATH).then(files => {
             let {page = 0, limit = 100} = query;
             page = Math.max(0, (+page || 0) >> 0);
             let offset = page * limit;
@@ -84,10 +84,10 @@ const dynamic = express().get('/', function (request, response, next) {
 });
 
 const pems = express.Router().get(/^\/\w+\.pem$/, function (request, response, next) {
-    let {pathname, query} = url.parse(request.url, true);
+    let {pathname} = url.parse(request.url);
     sync(pathname, done => {
         let path = PEM_PATH + pathname;
-        P.readFile(path).then(data => {
+        fsPromise.readFile(path).then(data => {
             response.setHeader('Content-Type', 'application/pkix-cert');
             response.end(data);
             fs.unlink(path, done);
