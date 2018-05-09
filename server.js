@@ -8,6 +8,51 @@ const http = require('http')
 const HOST = '127.0.0.1', PORT = 9090;
 const PEM_PATH = __dirname + '/pems';
 
+(function () {
+    if (typeof Promise.prototype.finally !== 'function') {
+        let speciesConstructor = function (O, defaultConstructor) {
+            if (!O || (typeof O !== 'object' && typeof O !== 'function')) {
+                throw new TypeError('Assertion failed: Type(O) is not Object');
+            }
+            let C = O.constructor;
+            if (typeof C === 'undefined') {
+                return defaultConstructor;
+            }
+            if (!C || (typeof C !== 'object' && typeof C !== 'function')) {
+                throw new TypeError('O.constructor is not an Object');
+            }
+            let S = typeof Symbol === 'function' && typeof Symbol.species === 'symbol' ? C[Symbol.species] : undefined;
+            if (S == null) {
+                return defaultConstructor;
+            }
+            if (typeof S === 'function' && S.prototype) {
+                return S;
+            }
+            throw new TypeError('no constructor found');
+        }, then = Promise.prototype.then;
+
+        let shim = {
+            finally(onFinally) {
+                let promise = this;
+                if (typeof promise !== 'object' || promise === null) {
+                    throw new TypeError('"this" value is not an Object');
+                }
+                let C = speciesConstructor(promise, Promise); // throws if SpeciesConstructor throws
+                if (typeof onFinally !== 'function') {
+                    return then.call(promise, onFinally, onFinally);
+                }
+                return then.call(
+                    promise,
+                    x => new C(resolve => resolve(onFinally())).then(() => x),
+                    // keep original stack trace
+                    e => new C(resolve => resolve(onFinally())).then(() => new Promise((resolve, reject) => reject(e)))
+                );
+            }
+        };
+        Object.defineProperty(Promise.prototype, 'finally', {configurable: true, writable: true, value: shim.finally});
+    }
+})();
+
 const fsPromise = function () {
     let keys = ['readdir', 'readFile', 'unlink'], obj = {};
     for (let key of keys) {
@@ -25,15 +70,10 @@ const fsPromise = function () {
 function newSync() {
     const cache = new Map();
     return (key, resolve) => {
-        const onFinally = () => cache.delete(key);
-
         function apply() {
             cache.set(key, new Promise(done => {
                 resolve(done);
-            }).then(
-                x => new Promise(resolve => resolve(onFinally())).then(() => x),
-                e => new Promise(resolve => resolve(onFinally())).then(() => new Promise((resolve, reject) => reject(e)))
-            ));
+            }).finally(() => cache.delete(key)));
         }
 
         const p = cache.get(key);
@@ -59,10 +99,14 @@ const notFound = express.Router().all('*', function (request, response) {
     }
 });
 
+let F;
+
 const dynamic = express().get('/', function (request, response, next) {
     if (request.accepts(['json', 'html']) === 'json') {
         const {query} = url.parse(request.url, true);
-        fsPromise.readdir(PEM_PATH).then(files => {
+        (F || (F = fsPromise.readdir(PEM_PATH).finally(() => {
+            F = undefined;
+        }))).then(files => {
             let {page = 0, limit = 100} = query;
             page = Math.max(0, (+page || 0) >> 0);
             let offset = page * limit;
